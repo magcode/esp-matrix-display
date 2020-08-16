@@ -29,8 +29,8 @@ uint8_t display_draw_time = 30; //30-70 is usually fine
 int clockColon = 0;
 int currentHour = 0;
 int currentMinute = 0;
-char *tempIn = (char *)"0.0";
-char *tempOut = (char *)"0.0";
+char tempIn[] = "00.0";
+char tempOut[] = "00.0";
 const long utcOffsetInSeconds = 7200;
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
@@ -40,18 +40,17 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, time_server, utcOffsetInSeconds);
 
 // Some standard colors
-uint16_t myRED = display.color565(255, 0, 0);
-uint16_t myORANGE = display.color565(255, 100, 0);
+
+uint16_t colOrange = display.color565(255, 100, 0);
 uint16_t colDarkOrange = display.color565(200, 50, 0);
+uint16_t colBlack = display.color565(0, 0, 0);
+
 uint16_t myGREEN = display.color565(0, 255, 0);
 uint16_t myBLUE = display.color565(0, 0, 255);
 uint16_t myWHITE = display.color565(255, 255, 255);
 uint16_t myYELLOW = display.color565(255, 255, 0);
 uint16_t myCYAN = display.color565(0, 255, 255);
 uint16_t myMAGENTA = display.color565(255, 0, 255);
-uint16_t myBLACK = display.color565(0, 0, 0);
-
-uint16_t myCOLORS[8] = {myRED, myGREEN, myBLUE, myWHITE, myYELLOW, myCYAN, myMAGENTA, myBLACK};
 
 void logT(const char *s)
 {
@@ -82,11 +81,11 @@ void taskClock(int id_)
   currentMinute = timeClient.getMinutes();
 
   display.clearDisplay();
-  display.setTextColor(display.color565(255, 100, 0));
+  display.setTextColor(colOrange);
   display.setCursor(3, 17);
   display.setFont(&FreeSans12pt7b);
   display.print(currentHour < 10 ? "0" + String(currentHour) : String(currentHour));
-
+  /*
   if (clockColon)
   {
     display.print(":");
@@ -97,31 +96,63 @@ void taskClock(int id_)
     display.print(" ");
     clockColon = 1;
   }
+  */
+  switch (clockColon)
+  {
+  case 0:
+    display.setTextColor(colBlack);
+    clockColon = 1;
+    break;
+  case 1:
+    display.setTextColor(colDarkOrange);
+    clockColon = 2;
+    break;
+  case 2:
+    display.setTextColor(colOrange);
+    clockColon = 3;
+    break;
+  case 3:
+    display.setTextColor(colDarkOrange);
+    clockColon = 0;
+    break;
+  }
+  display.print(":");
+  display.setTextColor(colOrange);
   display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
 
-  display.drawLine(0, 21, 63, 21, colDarkOrange);
+  //display.drawLine(0, 21, 63, 21, colDarkOrange);
 
   display.setTextColor(myWHITE);
   display.setFont(&Lato_Hairline_9);
   display.setCursor(0, 32);
-  display.print(tempIn);
-  display.print("$C ");
+  display.print(String(tempIn) + "$C ");
   display.setTextColor(myBLUE);
-  display.print(tempOut);
-  display.print("$C");
+  display.print(String(tempOut) + "$C ");
 }
 
 void callback(char *topic, byte *payload, unsigned int length)
 {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (unsigned int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+
   if (strcmp(topic, topTempIn) == 0)
   {
     payload[length] = '\0';
-    tempIn = (char *)payload;
+    //tempIn = (char *)payload;
+    strcpy(tempIn, (char *)payload);
+    Serial.print("Setting tempIn");
   }
   if (strcmp(topic, topTempOut) == 0)
   {
     payload[length] = '\0';
-    tempOut = (char *)payload;
+    //tempOut = (char *)payload;
+    strcpy(tempOut, (char *)payload);
+    Serial.print("Setting tempout");
   }
 }
 
@@ -162,6 +193,8 @@ void startWifi(void)
 
 void setup()
 {
+  Serial.begin(115200);
+  Serial.println("Starting");
   display.begin(16);
   display_update_enable(true);
   mqttClient.setServer(mqtt_server, mqtt_port);
@@ -170,7 +203,7 @@ void setup()
   xHeliOSSetup();
   int id = xTaskAdd("TASKCLOCK", &taskClock);
   xTaskWait(id);
-  xTaskSetTimer(id, 1000000);
+  xTaskSetTimer(id, 500000);
   timeClient.begin();
 }
 
