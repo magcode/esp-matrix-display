@@ -1,8 +1,9 @@
 #include <HeliOS_Arduino.h>
 #include <Wire.h>
 #include <PxMatrix.h>
-#include <FreeSans12pt7b.h>
-#include <Font.h>
+#include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/CustomFont.h>
+#include <Fonts/TomThumb.h>
 #include <Ticker.h>
 #include <ESP8266WiFi.h>
 #include <DNSServer.h>
@@ -28,16 +29,20 @@ uint8_t display_draw_time = 30; //30-70 is usually fine
 int clockColon = 0;
 int currentHour = 0;
 int currentMinute = 0;
+char *tempIn = (char *)"0.0";
+char *tempOut = (char *)"0.0";
 const long utcOffsetInSeconds = 7200;
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "192.168.155.1", utcOffsetInSeconds);
+NTPClient timeClient(ntpUDP, time_server, utcOffsetInSeconds);
 
 // Some standard colors
 uint16_t myRED = display.color565(255, 0, 0);
+uint16_t myORANGE = display.color565(255, 100, 0);
+uint16_t colDarkOrange = display.color565(200, 50, 0);
 uint16_t myGREEN = display.color565(0, 255, 0);
 uint16_t myBLUE = display.color565(0, 0, 255);
 uint16_t myWHITE = display.color565(255, 255, 255);
@@ -52,8 +57,8 @@ void logT(const char *s)
 {
   display.clearDisplay();
   display.setTextColor(myCYAN);
-  display.setFont(&Lato_Hairline_9);
-  display.setCursor(2, 0);
+  display.setFont(&TomThumb);
+  display.setCursor(2, 10);
   display.print(s);
 }
 
@@ -94,12 +99,30 @@ void taskClock(int id_)
   }
   display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
 
+  display.drawLine(0, 21, 63, 21, colDarkOrange);
+
   display.setTextColor(myWHITE);
   display.setFont(&Lato_Hairline_9);
   display.setCursor(0, 32);
-  display.print("23.2$C ");
+  display.print(tempIn);
+  display.print("$C ");
   display.setTextColor(myBLUE);
-  display.print("12.8$C");
+  display.print(tempOut);
+  display.print("$C");
+}
+
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  if (strcmp(topic, topTempIn) == 0)
+  {
+    payload[length] = '\0';
+    tempIn = (char *)payload;
+  }
+  if (strcmp(topic, topTempOut) == 0)
+  {
+    payload[length] = '\0';
+    tempOut = (char *)payload;
+  }
 }
 
 void startMqtt()
@@ -114,7 +137,8 @@ void startMqtt()
     {
       logT("MQTT connected");
       delay(1000);
-      mqttClient.subscribe(mqttTopicText);
+      mqttClient.subscribe(topTempOut);
+      mqttClient.subscribe(topTempIn);
       logT("MQTT subscribed");
     }
     else
@@ -141,6 +165,7 @@ void setup()
   display.begin(16);
   display_update_enable(true);
   mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(callback);
   startWifi();
   xHeliOSSetup();
   int id = xTaskAdd("TASKCLOCK", &taskClock);
