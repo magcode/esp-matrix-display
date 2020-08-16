@@ -2,8 +2,6 @@
 #include <Wire.h>
 #include <PxMatrix.h>
 #include <FreeSans12pt7b.h>
-#include <FreeSans9pt7b.h>
-#include <FreeMono6pt7b.h>
 #include <Font.h>
 #include <Ticker.h>
 #include <ESP8266WiFi.h>
@@ -54,7 +52,7 @@ void logT(const char *s)
 {
   display.clearDisplay();
   display.setTextColor(myCYAN);
-  display.setFont(&Arimo_Regular_10);
+  display.setFont(&Lato_Hairline_9);
   display.setCursor(2, 0);
   display.print(s);
 }
@@ -78,34 +76,30 @@ void taskClock(int id_)
   currentHour = timeClient.getHours();
   currentMinute = timeClient.getMinutes();
 
+  display.clearDisplay();
+  display.setTextColor(display.color565(255, 100, 0));
+  display.setCursor(3, 17);
+  display.setFont(&FreeSans12pt7b);
+  display.print(currentHour < 10 ? "0" + String(currentHour) : String(currentHour));
+
   if (clockColon)
   {
-    display.clearDisplay();
-    display.setTextColor(display.color565(255, 100, 0));
-    display.setCursor(3, 17);
-    display.setFont(&FreeSans12pt7b);
-    display.print(currentHour < 10 ? "0" + String(currentHour) : String(currentHour));
-    display.print(":");    
-    display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
-
-    display.setTextColor(myCYAN);
-    display.setFont(&Arimo_Regular_10);
-    display.setCursor(2, 32);
-    display.print("23 °C   12 °C");
-
+    display.print(":");
     clockColon = 0;
   }
   else
   {
-    display.clearDisplay();
-    display.setTextColor(display.color565(255, 100, 0));
-    display.setCursor(3, 17);
-    display.setFont(&FreeSans12pt7b);
-    display.print(currentHour < 10 ? "0" + String(currentHour) : String(currentHour));
-    display.print(" ");    
-    display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
+    display.print(" ");
     clockColon = 1;
   }
+  display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
+
+  display.setTextColor(myWHITE);
+  display.setFont(&Lato_Hairline_9);
+  display.setCursor(0, 32);
+  display.print("23.2$C ");
+  display.setTextColor(myBLUE);
+  display.print("12.8$C");
 }
 
 void startMqtt()
@@ -137,13 +131,13 @@ void startWifi(void)
   logT("Wifi connecting ...");
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(500);    
+    delay(500);
   }
   logT("Wifi connected");
 }
 
 void setup()
-{  
+{
   display.begin(16);
   display_update_enable(true);
   mqttClient.setServer(mqtt_server, mqtt_port);
@@ -152,7 +146,7 @@ void setup()
   int id = xTaskAdd("TASKCLOCK", &taskClock);
   xTaskWait(id);
   xTaskSetTimer(id, 1000000);
-  timeClient.begin();  
+  timeClient.begin();
 }
 
 uint8_t icon_index = 0;
