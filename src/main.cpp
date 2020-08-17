@@ -27,8 +27,11 @@ Ticker display_ticker;
 // the brighter the display. If too large the ESP will crash
 uint8_t display_draw_time = 30; //30-70 is usually fine
 int clockColon = 0;
+bool forward = true;
 int currentHour = 0;
 int currentMinute = 0;
+// 0=off, 1=heat, 2=cool
+int heatingMode = 0;
 char tempIn[] = "00.0";
 char tempOut[] = "00.0";
 const long utcOffsetInSeconds = 7200;
@@ -39,25 +42,18 @@ PubSubClient mqttClient(wifiClient);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, time_server, utcOffsetInSeconds);
 
-// Some standard colors
-
 uint16_t colOrange = display.color565(255, 100, 0);
-uint16_t colDarkOrange = display.color565(200, 50, 0);
+uint16_t colLightOrange = display.color565(255, 204, 153);
 uint16_t colBlack = display.color565(0, 0, 0);
-
-uint16_t myGREEN = display.color565(0, 255, 0);
-uint16_t myBLUE = display.color565(0, 0, 255);
-uint16_t myWHITE = display.color565(255, 255, 255);
-uint16_t myYELLOW = display.color565(255, 255, 0);
-uint16_t myCYAN = display.color565(0, 255, 255);
-uint16_t myMAGENTA = display.color565(255, 0, 255);
+uint16_t colWhite = display.color565(255, 255, 255);
+uint16_t colLightBlue = display.color565(30, 144, 255);
 
 void logT(const char *s)
 {
   display.clearDisplay();
-  display.setTextColor(myCYAN);
+  display.setTextColor(colLightBlue);
   display.setFont(&TomThumb);
-  display.setCursor(2, 10);
+  display.setCursor(0, 10);
   display.print(s);
 }
 
@@ -74,59 +70,86 @@ void display_update_enable(bool is_enable)
     display_ticker.detach();
 }
 
+void taskCol(int id)
+{
+  display.setCursor(29, 14);
+  display.setFont(&FreeSans12pt7b);
+
+  if (forward)
+  {
+    clockColon++;
+  }
+  else
+  {
+    clockColon--;
+  }
+
+  if (clockColon > 99)
+  {
+    forward = false;
+  }
+
+  if (clockColon < 1)
+  {
+    forward = true;
+  }
+
+  display.setTextColor(display.color565(clockColon * 2.5, clockColon, 0));
+  display.print(":");
+}
+
 void taskClock(int id_)
 {
+  int yPosMainText = 16;
   timeClient.update();
   currentHour = timeClient.getHours();
   currentMinute = timeClient.getMinutes();
 
   display.clearDisplay();
   display.setTextColor(colOrange);
-  display.setCursor(3, 17);
+  display.setCursor(3, yPosMainText);
   display.setFont(&FreeSans12pt7b);
   display.print(currentHour < 10 ? "0" + String(currentHour) : String(currentHour));
-  /*
-  if (clockColon)
-  {
-    display.print(":");
-    clockColon = 0;
-  }
-  else
-  {
-    display.print(" ");
-    clockColon = 1;
-  }
-  */
-  switch (clockColon)
-  {
-  case 0:
-    display.setTextColor(colBlack);
-    clockColon = 1;
-    break;
-  case 1:
-    display.setTextColor(colDarkOrange);
-    clockColon = 2;
-    break;
-  case 2:
-    display.setTextColor(colOrange);
-    clockColon = 3;
-    break;
-  case 3:
-    display.setTextColor(colDarkOrange);
-    clockColon = 0;
-    break;
-  }
-  display.print(":");
+
+  display.setCursor(36, yPosMainText);
   display.setTextColor(colOrange);
   display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
 
-  //display.drawLine(0, 21, 63, 21, colDarkOrange);
+  if (heatingMode > 0)
+  {
+    uint16_t color;
+    if (heatingMode == 1)
+    {
+      color = colOrange;
+    }
+    else
+    {
+      color = colLightBlue;
+    }
+    for (int i = 0; i < 28; i = i + 2)
+    {
+      display.drawPixel(i + 1, 20, color);
+      display.drawPixel(i, 21, color);
+    }
+  }
 
-  display.setTextColor(myWHITE);
+  display.setTextColor(colWhite);
   display.setFont(&Lato_Hairline_9);
   display.setCursor(0, 32);
   display.print(String(tempIn) + "$C ");
-  display.setTextColor(myBLUE);
+  float outside = atof(tempOut);
+  if (outside > 23)
+  {
+    display.setTextColor(colOrange);
+  }
+  else if (outside < 2)
+  {
+    display.setTextColor(colLightBlue);
+  }
+  else
+  {
+    display.setTextColor(colWhite);
+  }
   display.print(String(tempOut) + "$C ");
 }
 
@@ -143,16 +166,17 @@ void callback(char *topic, byte *payload, unsigned int length)
   if (strcmp(topic, topTempIn) == 0)
   {
     payload[length] = '\0';
-    //tempIn = (char *)payload;
     strcpy(tempIn, (char *)payload);
-    Serial.print("Setting tempIn");
   }
   if (strcmp(topic, topTempOut) == 0)
   {
     payload[length] = '\0';
-    //tempOut = (char *)payload;
     strcpy(tempOut, (char *)payload);
-    Serial.print("Setting tempout");
+  }
+  if (strcmp(topic, topCool) == 0)
+  {
+    payload[length] = '\0';
+    heatingMode = 2;
   }
 }
 
@@ -168,8 +192,12 @@ void startMqtt()
     {
       logT("MQTT connected");
       delay(1000);
+
       mqttClient.subscribe(topTempOut);
       mqttClient.subscribe(topTempIn);
+      mqttClient.subscribe(topHeat);
+      mqttClient.subscribe(topCool);
+
       logT("MQTT subscribed");
     }
     else
@@ -203,7 +231,12 @@ void setup()
   xHeliOSSetup();
   int id = xTaskAdd("TASKCLOCK", &taskClock);
   xTaskWait(id);
-  xTaskSetTimer(id, 500000);
+  xTaskSetTimer(id, 10000000);
+
+  id = xTaskAdd("TASKCOL", &taskCol);
+  xTaskWait(id);
+  xTaskSetTimer(id, 10000);
+
   timeClient.begin();
 }
 
