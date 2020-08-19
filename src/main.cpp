@@ -1,5 +1,6 @@
 #include <HeliOS_Arduino.h>
 #include <Wire.h>
+//#include <ErriezBH1750.h>
 #include <PxMatrix.h>
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/CustomFont.h>
@@ -41,6 +42,7 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, time_server, utcOffsetInSeconds);
+//BH1750 lightSensor(LOW);
 
 uint16_t colOrange = display.color565(255, 100, 0);
 uint16_t colLightOrange = display.color565(255, 204, 153);
@@ -121,15 +123,26 @@ void taskClock(int id_)
     if (heatingMode == 1)
     {
       color = colOrange;
+      display.drawFastHLine(3, 19, 2, color);
+      display.drawFastHLine(2, 20, 4, color);
+      display.drawFastHLine(1, 21, 6, color);
+      display.drawFastHLine(0, 22, 8, color);
+    }
+    else if (heatingMode == 2)
+    {
+      color = colLightBlue;
+      display.drawFastHLine(0, 19, 8, color);
+      display.drawFastHLine(1, 20, 6, color);
+      display.drawFastHLine(2, 21, 4, color);
+      display.drawFastHLine(3, 22, 2, color);
     }
     else
     {
-      color = colLightBlue;
-    }
-    for (int i = 0; i < 28; i = i + 2)
-    {
-      display.drawPixel(i + 1, 20, color);
-      display.drawPixel(i, 21, color);
+      color = colBlack;
+      display.drawFastHLine(0, 19, 8, color);
+      display.drawFastHLine(0, 20, 8, color);
+      display.drawFastHLine(0, 21, 8, color);
+      display.drawFastHLine(0, 22, 8, color);
     }
   }
 
@@ -155,14 +168,6 @@ void taskClock(int id_)
 
 void callback(char *topic, byte *payload, unsigned int length)
 {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (unsigned int i = 0; i < length; i++)
-  {
-    Serial.print((char)payload[i]);
-  }
-
   if (strcmp(topic, topTempIn) == 0)
   {
     payload[length] = '\0';
@@ -173,10 +178,33 @@ void callback(char *topic, byte *payload, unsigned int length)
     payload[length] = '\0';
     strcpy(tempOut, (char *)payload);
   }
+
   if (strcmp(topic, topCool) == 0)
   {
     payload[length] = '\0';
-    heatingMode = 2;
+    char *cstring = (char *)payload;
+    if (strcmp(cstring, "On") == 0)
+    {
+      heatingMode = 2;
+    }
+    else
+    {
+      heatingMode = 0;
+    }
+  }
+
+  if (strcmp(topic, topHeat) == 0)
+  {
+    payload[length] = '\0';
+    char *cstring = (char *)payload;
+    if (strcmp(cstring, "1") == 0)
+    {
+      heatingMode = 1;
+    }
+    else
+    {
+      heatingMode = 0;
+    }
   }
 }
 
@@ -221,8 +249,9 @@ void startWifi(void)
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial.println("Starting");
+  //pinMode(1, FUNCTION_3);
+  //pinMode(3, FUNCTION_3);
+
   display.begin(16);
   display_update_enable(true);
   mqttClient.setServer(mqtt_server, mqtt_port);
@@ -231,13 +260,19 @@ void setup()
   xHeliOSSetup();
   int id = xTaskAdd("TASKCLOCK", &taskClock);
   xTaskWait(id);
-  xTaskSetTimer(id, 10000000);
-
+  // two seconds for the time
+  xTaskSetTimer(id, 2*1000*1000);
+  
   id = xTaskAdd("TASKCOL", &taskCol);
   xTaskWait(id);
-  xTaskSetTimer(id, 10000);
+  // 10 milliseconds for the colon
+  xTaskSetTimer(id, 10*1000);
 
   timeClient.begin();
+
+  //Wire.begin(3, 1);
+  //lightSensor.begin(ModeContinuous, ResolutionMid);
+  //lightSensor.startConversion();
 }
 
 uint8_t icon_index = 0;
@@ -249,4 +284,9 @@ void loop()
     startMqtt();
   }
   mqttClient.loop();
+
+  //uint16_t lux;
+  // Read light without wait
+  //lux = lightSensor.read();
+  //itoa(lux, tempIn, 10);
 }
