@@ -33,8 +33,8 @@ int currentHour = 0;
 int currentMinute = 0;
 // 0=off, 1=heat, 2=cool
 int heatingMode = 0;
-char tempIn[] = "00.0";
-char tempOut[] = "00.0";
+float tempIn = 0;
+float tempOut = 0;
 const long utcOffsetInSeconds = 7200;
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
@@ -149,13 +149,14 @@ void taskClock(int id_)
   display.setTextColor(colWhite);
   display.setFont(&Lato_Hairline_9);
   display.setCursor(0, 32);
-  display.print(String(tempIn) + "$C ");
-  float outside = atof(tempOut);
-  if (outside > 23)
+  display.print(tempIn, 1);
+  // "$" is a degree char in my font
+  display.print("$C ");
+  if (tempOut > 23)
   {
     display.setTextColor(colOrange);
   }
-  else if (outside < 2)
+  else if (tempOut < 2)
   {
     display.setTextColor(colLightBlue);
   }
@@ -163,7 +164,8 @@ void taskClock(int id_)
   {
     display.setTextColor(colWhite);
   }
-  display.print(String(tempOut) + "$C ");
+  display.print(tempOut, 1);
+  display.print("$C");
 }
 
 void callback(char *topic, byte *payload, unsigned int length)
@@ -171,12 +173,12 @@ void callback(char *topic, byte *payload, unsigned int length)
   if (strcmp(topic, topTempIn) == 0)
   {
     payload[length] = '\0';
-    strcpy(tempIn, (char *)payload);
+    tempIn = atof((char *)payload);
   }
   if (strcmp(topic, topTempOut) == 0)
   {
     payload[length] = '\0';
-    strcpy(tempOut, (char *)payload);
+    tempOut = atof((char *)payload);
   }
 
   if (strcmp(topic, topCool) == 0)
@@ -261,12 +263,12 @@ void setup()
   int id = xTaskAdd("TASKCLOCK", &taskClock);
   xTaskWait(id);
   // two seconds for the time
-  xTaskSetTimer(id, 2*1000*1000);
-  
+  xTaskSetTimer(id, 2 * 1000 * 1000);
+
   id = xTaskAdd("TASKCOL", &taskCol);
   xTaskWait(id);
   // 10 milliseconds for the colon
-  xTaskSetTimer(id, 10*1000);
+  xTaskSetTimer(id, 10 * 1000);
 
   timeClient.begin();
 
