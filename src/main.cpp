@@ -1,6 +1,6 @@
 #include <HeliOS_Arduino.h>
 #include <Wire.h>
-//#include <ErriezBH1750.h>
+#include <BH1750.h>
 #include <PxMatrix.h>
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/CustomFont.h>
@@ -26,7 +26,7 @@ Ticker display_ticker;
 
 // This defines the 'on' time of the display is us. The larger this number,
 // the brighter the display. If too large the ESP will crash
-uint8_t display_draw_time = 30; //30-70 is usually fine
+uint8_t display_draw_time = 10; //30-70 is usually fine
 int clockColon = 0;
 bool forward = true;
 int currentHour = 0;
@@ -42,7 +42,9 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, time_server, utcOffsetInSeconds);
-//BH1750 lightSensor(LOW);
+bool BH1750Check = false;
+BH1750 lightMeter;
+float light = 0;
 
 uint16_t colOrange = display.color565(255, 100, 0);
 uint16_t colLightOrange = display.color565(255, 204, 153);
@@ -98,6 +100,25 @@ void taskCol(int id)
 
   display.setTextColor(display.color565(clockColon * 2.5, clockColon, 0));
   display.print(":");
+}
+
+void taskSensor(int id)
+{
+  if (BH1750Check)
+  {
+    light = lightMeter.readLightLevel();
+    char buff[10];    
+    dtostrf(light, 4, 0, buff);
+    mqttClient.publish(topSensor, buff);
+
+    int bri = (int) light;
+    bri = 50 + bri*2;
+    if (bri>255) {
+      bri = 255;
+    }
+
+    display.setBrightness(bri);    
+  }
 }
 
 void taskClock(int id_)
@@ -166,6 +187,10 @@ void taskClock(int id_)
   }
   display.print(tempOut, 1);
   display.print("$C");
+
+  display.setTextColor(colWhite);
+  display.setCursor(32, 24);
+  display.print(light, 0);
 }
 
 void callback(char *topic, byte *payload, unsigned int length)
@@ -175,10 +200,19 @@ void callback(char *topic, byte *payload, unsigned int length)
     payload[length] = '\0';
     tempIn = atof((char *)payload);
   }
+
   if (strcmp(topic, topTempOut) == 0)
   {
     payload[length] = '\0';
     tempOut = atof((char *)payload);
+  }
+
+  if (strcmp(topic, topBright) == 0)
+  {
+    payload[length] = '\0';
+    char *cstring = (char *)payload;
+    int i = atoi(cstring);
+    display.setBrightness(i);
   }
 
   if (strcmp(topic, topCool) == 0)
@@ -227,7 +261,7 @@ void startMqtt()
       mqttClient.subscribe(topTempIn);
       mqttClient.subscribe(topHeat);
       mqttClient.subscribe(topCool);
-
+      mqttClient.subscribe(topBright);
       logT("MQTT subscribed");
     }
     else
@@ -251,8 +285,8 @@ void startWifi(void)
 
 void setup()
 {
-  //pinMode(1, FUNCTION_3);
-  //pinMode(3, FUNCTION_3);
+  pinMode(1, FUNCTION_3);
+  pinMode(3, FUNCTION_3);
 
   display.begin(16);
   display_update_enable(true);
@@ -272,9 +306,23 @@ void setup()
 
   timeClient.begin();
 
-  //Wire.begin(3, 1);
-  //lightSensor.begin(ModeContinuous, ResolutionMid);
-  //lightSensor.startConversion();
+  Wire.begin(1, 3); //SDA(tx), SCL(rx)
+  BH1750Check = lightMeter.begin();
+  if (BH1750Check)
+  {
+    logT("Lightsensor init");
+    delay(1000);
+  }
+  else
+  {
+    logT("Lightsensor fail");
+    delay(1000);
+  }
+
+  id = xTaskAdd("TASKSENSOR", &taskSensor);
+  xTaskWait(id);
+  // five seconds for the sensor
+  xTaskSetTimer(id, 5 * 1000 * 1000);
 }
 
 uint8_t icon_index = 0;
@@ -286,9 +334,4 @@ void loop()
     startMqtt();
   }
   mqttClient.loop();
-
-  //uint16_t lux;
-  // Read light without wait
-  //lux = lightSensor.read();
-  //itoa(lux, tempIn, 10);
 }
