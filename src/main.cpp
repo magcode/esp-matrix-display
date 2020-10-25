@@ -1,5 +1,6 @@
 #include <HeliOS_Arduino.h>
 #include <Wire.h>
+#include <Adafruit_I2CDevice.h>
 #include <BH1750.h>
 #include <PxMatrix.h>
 #include <Fonts/FreeSans12pt7b.h>
@@ -13,6 +14,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <Secrets.h>
+#include <Timezone.h>
 
 Ticker display_ticker;
 
@@ -26,28 +28,42 @@ Ticker display_ticker;
 
 // This defines the 'on' time of the display is us. The larger this number,
 // the brighter the display. If too large the ESP will crash
-uint8_t display_draw_time = 10; //30-70 is usually fine
+uint8_t display_draw_time = 80; //30-70 is usually fine
 int clockColon = 0;
 bool forward = true;
 int currentHour = 0;
 int currentMinute = 0;
+int brightness = 0;
 // 0=off, 1=heat, 2=cool
 int heatingMode = 0;
 float tempIn = 0;
 float tempOut = 0;
-const long utcOffsetInSeconds = 7200;
+//const long utcOffsetInSeconds = 7200;
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, time_server, utcOffsetInSeconds);
+NTPClient timeClient(ntpUDP, time_server, 0, 3600000);
 bool BH1750Check = false;
 BH1750 lightMeter;
 float light = 0;
 
+//Central European Time (Frankfurt, Paris)
+TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120}; //Central European Summer Time
+TimeChangeRule CET = {"CET ", Last, Sun, Oct, 3, 60};   //Central European Standard Time
+Timezone CE(CEST, CET);
+
 uint16_t colOrange = display.color565(255, 100, 0);
-uint16_t colLightOrange = display.color565(255, 204, 153);
+
+int colClockNightGreen = 30;
+uint16_t colClockNight = display.color565(255, colClockNightGreen, 0);
+
+int colClockGreen = 100;
+uint16_t colClock = display.color565(255, colClockGreen, 0);
+
+uint16_t colRed = display.color565(255, 0, 0);
+
 uint16_t colBlack = display.color565(0, 0, 0);
 uint16_t colWhite = display.color565(255, 255, 255);
 uint16_t colLightBlue = display.color565(30, 144, 255);
@@ -74,7 +90,7 @@ void display_update_enable(bool is_enable)
     display_ticker.detach();
 }
 
-void taskCol(int id)
+void taskCol(xTaskId id)
 {
   display.setCursor(29, 14);
   display.setFont(&FreeSans12pt7b);
@@ -97,45 +113,68 @@ void taskCol(int id)
   {
     forward = true;
   }
+  
+  if (light == 0)
+  {
+    display.setTextColor(display.color565(clockColon * 2.5, colClockNightGreen, 0));
+  }
+  else
+  {
+    display.setTextColor(display.color565(clockColon * 2.5, colClockGreen, 0));
+  }
 
-  display.setTextColor(display.color565(clockColon * 2.5, clockColon, 0));
   display.print(":");
 }
 
-void taskSensor(int id)
+void taskSensor(xTaskId id)
 {
   if (BH1750Check)
   {
     light = lightMeter.readLightLevel();
-    char buff[10];    
+    char buff[10];
     dtostrf(light, 4, 0, buff);
     mqttClient.publish(topSensor, buff);
 
-    int bri = (int) light;
-    bri = 50 + bri*2;
-    if (bri>255) {
-      bri = 255;
+    int brightness = (int)light;
+    brightness = 9 + brightness * 5;
+    if (brightness > 255)
+    {
+      brightness = 255;
     }
 
-    display.setBrightness(bri);    
+    display.setBrightness(brightness);
   }
+  timeClient.update();
 }
 
-void taskClock(int id_)
+void taskClock(xTaskId id_)
 {
   int yPosMainText = 16;
   timeClient.update();
   currentHour = timeClient.getHours();
   currentMinute = timeClient.getMinutes();
 
+  time_t tTlocal = CE.toLocal((time_t)timeClient.getEpochTime());
+  currentHour = hour(tTlocal);
+  currentMinute = minute(tTlocal);
+
+  uint16_t clockColor = colClock;
+  uint16_t insideTempColor = colWhite;
+
+  if (light == 0)
+  {
+    clockColor = colClockNight;
+    insideTempColor = colOrange;
+  }
+
   display.clearDisplay();
-  display.setTextColor(colOrange);
+  display.setTextColor(clockColor);
   display.setCursor(3, yPosMainText);
   display.setFont(&FreeSans12pt7b);
   display.print(currentHour < 10 ? "0" + String(currentHour) : String(currentHour));
 
   display.setCursor(36, yPosMainText);
-  display.setTextColor(colOrange);
+  display.setTextColor(clockColor);
   display.print(currentMinute < 10 ? "0" + String(currentMinute) : String(currentMinute));
 
   if (heatingMode > 0)
@@ -167,7 +206,7 @@ void taskClock(int id_)
     }
   }
 
-  display.setTextColor(colWhite);
+  display.setTextColor(insideTempColor);
   display.setFont(&Lato_Hairline_9);
   display.setCursor(0, 32);
   display.print(tempIn, 1);
@@ -183,14 +222,14 @@ void taskClock(int id_)
   }
   else
   {
-    display.setTextColor(colWhite);
+    display.setTextColor(insideTempColor);
   }
   display.print(tempOut, 1);
   display.print("$C");
 
-  display.setTextColor(colWhite);
-  display.setCursor(32, 24);
-  display.print(light, 0);
+  //display.setTextColor(colWhite);
+  //display.setCursor(32, 24);
+  //display.print(light, 0);
 }
 
 void callback(char *topic, byte *payload, unsigned int length)
@@ -323,6 +362,8 @@ void setup()
   xTaskWait(id);
   // five seconds for the sensor
   xTaskSetTimer(id, 5 * 1000 * 1000);
+
+  display.setBrightness(255);
 }
 
 uint8_t icon_index = 0;
