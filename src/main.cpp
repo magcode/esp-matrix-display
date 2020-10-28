@@ -29,16 +29,17 @@ Ticker display_ticker;
 // This defines the 'on' time of the display is us. The larger this number,
 // the brighter the display. If too large the ESP will crash
 uint8_t display_draw_time = 80; //30-70 is usually fine
-int clockColon = 0;
+
 bool forward = true;
 int currentHour = 0;
 int currentMinute = 0;
 int brightness = 0;
+int minimalBright = 4;
 // 0=off, 1=heat, 2=cool
 int heatingMode = 0;
 float tempIn = 0;
 float tempOut = 0;
-//const long utcOffsetInSeconds = 7200;
+int clockColon = 1;
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
 WiFiClient wifiClient;
@@ -90,11 +91,12 @@ void display_update_enable(bool is_enable)
     display_ticker.detach();
 }
 
-void taskCol(xTaskId id)
+void taskColonBlink(xTaskId id)
 {
+  int steps = 50;
   display.setCursor(29, 14);
   display.setFont(&FreeSans12pt7b);
-
+  
   if (forward)
   {
     clockColon++;
@@ -104,23 +106,23 @@ void taskCol(xTaskId id)
     clockColon--;
   }
 
-  if (clockColon > 99)
+  if (clockColon > steps)
   {
     forward = false;
   }
 
-  if (clockColon < 1)
+  if (clockColon < 2)
   {
     forward = true;
   }
-  
+
   if (light == 0)
   {
-    display.setTextColor(display.color565(clockColon * 2.5, colClockNightGreen, 0));
+    display.setTextColor(display.color565(255 / steps * clockColon, colClockNightGreen / steps * clockColon, 0));
   }
   else
   {
-    display.setTextColor(display.color565(clockColon * 2.5, colClockGreen, 0));
+    display.setTextColor(display.color565(255 / steps * clockColon, colClockGreen / steps * clockColon, 0));
   }
 
   display.print(":");
@@ -136,7 +138,7 @@ void taskSensor(xTaskId id)
     mqttClient.publish(topSensor, buff);
 
     int brightness = (int)light;
-    brightness = 9 + brightness * 5;
+    brightness = minimalBright + brightness * 5;
     if (brightness > 255)
     {
       brightness = 255;
@@ -254,6 +256,13 @@ void callback(char *topic, byte *payload, unsigned int length)
     display.setBrightness(i);
   }
 
+  if (strcmp(topic, topMinimalBright) == 0)
+  {
+    payload[length] = '\0';
+    char *cstring = (char *)payload;
+    minimalBright = atoi(cstring);
+  }
+
   if (strcmp(topic, topCool) == 0)
   {
     payload[length] = '\0';
@@ -301,6 +310,7 @@ void startMqtt()
       mqttClient.subscribe(topHeat);
       mqttClient.subscribe(topCool);
       mqttClient.subscribe(topBright);
+      mqttClient.subscribe(topMinimalBright);
       logT("MQTT subscribed");
     }
     else
@@ -338,10 +348,11 @@ void setup()
   // two seconds for the time
   xTaskSetTimer(id, 2 * 1000 * 1000);
 
-  id = xTaskAdd("TASKCOL", &taskCol);
+  id = xTaskAdd("TASKCOL", &taskColonBlink);
   xTaskWait(id);
   // 10 milliseconds for the colon
-  xTaskSetTimer(id, 10 * 1000);
+  //xTaskSetTimer(id, 10 * 1000);
+  xTaskSetTimer(id, 20 * 1000);
 
   timeClient.begin();
 
