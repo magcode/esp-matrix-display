@@ -11,10 +11,8 @@
 #include <DNSServer.h>
 #include <WiFiManager.h>
 #include <PubSubClient.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
 #include <Secrets.h>
-#include <Timezone.h>
+#include <time.h>
 
 Ticker display_ticker;
 
@@ -25,10 +23,11 @@ Ticker display_ticker;
 #define P_D 12
 #define P_E 0
 #define P_OE 2
-
 // This defines the 'on' time of the display is us. The larger this number,
 // the brighter the display. If too large the ESP will crash
 uint8_t display_draw_time = 80; //30-70 is usually fine
+
+struct tm lt;
 
 bool forward = true;
 int currentHour = 0;
@@ -44,16 +43,10 @@ int clockColon = 1;
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, time_server, 0, 3600000);
+
 bool BH1750Check = false;
 BH1750 lightMeter;
 float light = 0;
-
-//Central European Time (Frankfurt, Paris)
-TimeChangeRule CEST = {"CEST", Last, Sun, Mar, 2, 120}; //Central European Summer Time
-TimeChangeRule CET = {"CET ", Last, Sun, Oct, 3, 60};   //Central European Standard Time
-Timezone CE(CEST, CET);
 
 uint16_t colOrange = display.color565(255, 100, 0);
 
@@ -91,12 +84,17 @@ void display_update_enable(bool is_enable)
     display_ticker.detach();
 }
 
+void taskTimeSync(xTaskId id)
+{
+  configTime(MY_TZ, time_server);
+}
+
 void taskColonBlink(xTaskId id)
 {
   int steps = 50;
   display.setCursor(29, 14);
   display.setFont(&FreeSans12pt7b);
-  
+
   if (forward)
   {
     clockColon++;
@@ -146,19 +144,16 @@ void taskSensor(xTaskId id)
 
     display.setBrightness(brightness);
   }
-  timeClient.update();
 }
 
 void taskClock(xTaskId id_)
 {
   int yPosMainText = 16;
-  timeClient.update();
-  currentHour = timeClient.getHours();
-  currentMinute = timeClient.getMinutes();
+  time_t now = time(&now);
+  localtime_r(&now, &lt);
 
-  time_t tTlocal = CE.toLocal((time_t)timeClient.getEpochTime());
-  currentHour = hour(tTlocal);
-  currentMinute = minute(tTlocal);
+  currentHour = lt.tm_hour;
+  currentMinute = lt.tm_min;
 
   uint16_t clockColor = colClock;
   uint16_t insideTempColor = colWhite;
@@ -343,18 +338,7 @@ void setup()
   mqttClient.setCallback(callback);
   startWifi();
   xHeliOSSetup();
-  int id = xTaskAdd("TASKCLOCK", &taskClock);
-  xTaskWait(id);
-  // two seconds for the time
-  xTaskSetTimer(id, 2 * 1000 * 1000);
-
-  id = xTaskAdd("TASKCOL", &taskColonBlink);
-  xTaskWait(id);
-  // 10 milliseconds for the colon
-  //xTaskSetTimer(id, 10 * 1000);
-  xTaskSetTimer(id, 20 * 1000);
-
-  timeClient.begin();
+  configTime(MY_TZ, time_server);
 
   Wire.begin(1, 3); //SDA(tx), SCL(rx)
   BH1750Check = lightMeter.begin();
@@ -369,12 +353,27 @@ void setup()
     delay(1000);
   }
 
+  display.setBrightness(255);
+
+  // two seconds for the time
+  int id = xTaskAdd("TASKCLOCK", &taskClock);
+  xTaskWait(id);
+  xTaskSetTimer(id, 2 * 1000 * 1000);
+
+  // 20 milliseconds for the colon
+  id = xTaskAdd("TASKCOL", &taskColonBlink);
+  xTaskWait(id);
+  xTaskSetTimer(id, 20 * 1000);
+
+  // five seconds for the sensor
   id = xTaskAdd("TASKSENSOR", &taskSensor);
   xTaskWait(id);
-  // five seconds for the sensor
   xTaskSetTimer(id, 5 * 1000 * 1000);
 
-  display.setBrightness(255);
+  // four hours for the timesync
+  id = xTaskAdd("TASKTIMESYNC", &taskTimeSync);
+  xTaskWait(id);
+  xTaskSetTimer(id, 4 * 60 * 60 * 1000 * 1000);
 }
 
 uint8_t icon_index = 0;
