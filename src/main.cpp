@@ -1,7 +1,7 @@
 #include <HeliOS_Arduino.h>
 #include <Wire.h>
 #include <Adafruit_I2CDevice.h>
-#include <BH1750.h>
+#include <AS_BH1750.h>
 #include <PxMatrix.h>
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/CustomFont.h>
@@ -39,14 +39,15 @@ int heatingMode = 0;
 float tempIn = 0;
 float tempOut = 0;
 int clockColon = 1;
+char onScreenDebugBuffer[20];
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
 bool BH1750Check = false;
-BH1750 lightMeter;
-float light = 0;
+AS_BH1750 lightMeter;
+float currentLight = 0;
 
 uint16_t colOrange = display.color565(255, 100, 0);
 
@@ -114,7 +115,7 @@ void taskColonBlink(xTaskId id)
     forward = true;
   }
 
-  if (light == 0)
+  if (currentLight == 0)
   {
     display.setTextColor(display.color565(255 / steps * clockColon, colClockNightGreen / steps * clockColon, 0));
   }
@@ -130,13 +131,17 @@ void taskSensor(xTaskId id)
 {
   if (BH1750Check)
   {
-    light = lightMeter.readLightLevel();
+    currentLight = lightMeter.readLightLevel();
     char buff[10];
-    dtostrf(light, 4, 0, buff);
+    dtostrf(currentLight, 4, 2, buff);
     mqttClient.publish(topSensor, buff);
 
-    int brightness = (int)light;
-    brightness = minimalBright + brightness * 5;
+    memset(onScreenDebugBuffer, 0, sizeof(onScreenDebugBuffer));
+    strcat(onScreenDebugBuffer, "Light: ");
+    strcat(onScreenDebugBuffer, buff);
+
+    int brightness = (int)currentLight;
+    brightness = minimalBright + currentLight * 5;
     if (brightness > 255)
     {
       brightness = 255;
@@ -158,7 +163,7 @@ void taskClock(xTaskId id_)
   uint16_t clockColor = colClock;
   uint16_t insideTempColor = colWhite;
 
-  if (light == 0)
+  if (currentLight == 0)
   {
     clockColor = colClockNight;
     insideTempColor = colOrange;
@@ -224,9 +229,11 @@ void taskClock(xTaskId id_)
   display.print(tempOut, 1);
   display.print("$C");
 
-  //display.setTextColor(colWhite);
-  //display.setCursor(32, 24);
-  //display.print(light, 0);
+
+  display.setTextColor(colClockNight);
+  display.setFont(&TomThumb);
+  display.setCursor(5, 23);
+  display.print(onScreenDebugBuffer);
 }
 
 void callback(char *topic, byte *payload, unsigned int length)
@@ -325,6 +332,7 @@ void startWifi(void)
     delay(500);
   }
   logT("Wifi connected");
+  WiFi.softAPdisconnect(true);
 }
 
 void setup()
@@ -341,15 +349,15 @@ void setup()
   configTime(MY_TZ, time_server);
 
   Wire.begin(1, 3); //SDA(tx), SCL(rx)
-  BH1750Check = lightMeter.begin();
+  BH1750Check = lightMeter.begin(RESOLUTION_AUTO_HIGH, true);
   if (BH1750Check)
   {
-    logT("Lightsensor init");
+    logT("Sensor connected.");
     delay(1000);
   }
   else
   {
-    logT("Lightsensor fail");
+    logT("Sensor failed.");
     delay(1000);
   }
 
@@ -373,7 +381,9 @@ void setup()
   // four hours for the timesync
   id = xTaskAdd("TASKTIMESYNC", &taskTimeSync);
   xTaskWait(id);
-  xTaskSetTimer(id, 4 * 60 * 60 * 1000 * 1000);
+  unsigned long i;
+  i = 4 * 60 * 60 * 1000 * 1000;
+  xTaskSetTimer(id, i);
 }
 
 uint8_t icon_index = 0;
