@@ -28,18 +28,18 @@ Ticker display_ticker;
 uint8_t display_draw_time = 80; //30-70 is usually fine
 
 struct tm lt;
-
-bool forward = true;
 int currentHour = 0;
 int currentMinute = 0;
-int brightness = 0;
+
 int minimalBright = 4;
+
 // 0=off, 1=heat, 2=cool
 int heatingMode = 0;
 float tempIn = 0;
 float tempOut = 0;
+
 int clockColon = 1;
-char onScreenDebugBuffer[20];
+bool forward = true;
 
 PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
 WiFiClient wifiClient;
@@ -48,25 +48,30 @@ PubSubClient mqttClient(wifiClient);
 bool BH1750Check = false;
 AS_BH1750 lightMeter;
 float currentLight = 0;
+bool lightMeterDebug = false;
+char onScreenDebugBuffer[20];
+int brightness = 0;
 
-uint16_t colOrange = display.color565(255, 100, 0);
 
 int colClockNightGreen = 30;
 uint16_t colClockNight = display.color565(255, colClockNightGreen, 0);
-
 int colClockGreen = 100;
 uint16_t colClock = display.color565(255, colClockGreen, 0);
 
-uint16_t colRed = display.color565(255, 0, 0);
-
 uint16_t colBlack = display.color565(0, 0, 0);
-uint16_t colWhite = display.color565(255, 255, 255);
-uint16_t colLightBlue = display.color565(30, 144, 255);
+
+uint16_t colInsideTemp = display.color565(255, 255, 255);
+uint16_t colInsideTempNight = display.color565(255, 116, 26);
+
+uint16_t colWarm = display.color565(255, 0, 0);
+uint16_t colCold = display.color565(30, 144, 255);
+uint16_t colColdNight = display.color565(138, 138, 193);
+
 
 void logT(const char *s)
 {
   display.clearDisplay();
-  display.setTextColor(colLightBlue);
+  display.setTextColor(colCold);
   display.setFont(&TomThumb);
   display.setCursor(0, 10);
   display.print(s);
@@ -88,6 +93,7 @@ void display_update_enable(bool is_enable)
 void taskTimeSync(xTaskId id)
 {
   configTime(MY_TZ, time_server);
+  mqttClient.publish("home/sz/display/time", "sync");
 }
 
 void taskColonBlink(xTaskId id)
@@ -136,10 +142,6 @@ void taskSensor(xTaskId id)
     dtostrf(currentLight, 4, 2, buff);
     mqttClient.publish(topSensor, buff);
 
-    memset(onScreenDebugBuffer, 0, sizeof(onScreenDebugBuffer));
-    strcat(onScreenDebugBuffer, "Light: ");
-    strcat(onScreenDebugBuffer, buff);
-
     int brightness = (int)currentLight;
     brightness = minimalBright + currentLight * 5;
     if (brightness > 255)
@@ -148,6 +150,14 @@ void taskSensor(xTaskId id)
     }
 
     display.setBrightness(brightness);
+
+    memset(onScreenDebugBuffer, 0, sizeof(onScreenDebugBuffer));
+    strcat(onScreenDebugBuffer, "Sen:");
+    strcat(onScreenDebugBuffer, buff);
+    strcat(onScreenDebugBuffer, "lx Bri:");
+    char cstr[3];
+    itoa(brightness, cstr, 10);
+    strcat(onScreenDebugBuffer, cstr);
   }
 }
 
@@ -161,12 +171,12 @@ void taskClock(xTaskId id_)
   currentMinute = lt.tm_min;
 
   uint16_t clockColor = colClock;
-  uint16_t insideTempColor = colWhite;
+  uint16_t insideTempColor = colInsideTemp;
 
   if (currentLight == 0)
   {
     clockColor = colClockNight;
-    insideTempColor = colOrange;
+    insideTempColor = colInsideTempNight;
   }
 
   display.clearDisplay();
@@ -181,18 +191,16 @@ void taskClock(xTaskId id_)
 
   if (heatingMode > 0)
   {
-    uint16_t color;
     if (heatingMode == 1)
     {
-      color = colOrange;
-      display.drawFastHLine(3, 19, 2, color);
-      display.drawFastHLine(2, 20, 4, color);
-      display.drawFastHLine(1, 21, 6, color);
-      display.drawFastHLine(0, 22, 8, color);
+      display.drawFastHLine(3, 19, 2, clockColor);
+      display.drawFastHLine(2, 20, 4, clockColor);
+      display.drawFastHLine(1, 21, 6, clockColor);
+      display.drawFastHLine(0, 22, 8, clockColor);
     }
     else if (heatingMode == 2)
     {
-      color = colLightBlue;
+      uint16_t color = currentLight == 0 ? colColdNight : colCold;
       display.drawFastHLine(0, 19, 8, color);
       display.drawFastHLine(1, 20, 6, color);
       display.drawFastHLine(2, 21, 4, color);
@@ -200,7 +208,7 @@ void taskClock(xTaskId id_)
     }
     else
     {
-      color = colBlack;
+      uint16_t color = colBlack;
       display.drawFastHLine(0, 19, 8, color);
       display.drawFastHLine(0, 20, 8, color);
       display.drawFastHLine(0, 21, 8, color);
@@ -216,11 +224,11 @@ void taskClock(xTaskId id_)
   display.print("$C ");
   if (tempOut > 23)
   {
-    display.setTextColor(colOrange);
+    display.setTextColor(colWarm);
   }
   else if (tempOut < 2)
   {
-    display.setTextColor(colLightBlue);
+    display.setTextColor(currentLight == 0 ? colColdNight : colCold);
   }
   else
   {
@@ -229,14 +237,16 @@ void taskClock(xTaskId id_)
   display.print(tempOut, 1);
   display.print("$C");
 
-
-  display.setTextColor(colClockNight);
-  display.setFont(&TomThumb);
-  display.setCursor(5, 23);
-  display.print(onScreenDebugBuffer);
+  if (lightMeterDebug)
+  {
+    display.setTextColor(colClockNight);
+    display.setFont(&TomThumb);
+    display.setCursor(0, 23);
+    display.print(onScreenDebugBuffer);
+  }
 }
 
-void callback(char *topic, byte *payload, unsigned int length)
+void mqttMessageReceived(char *topic, byte *payload, unsigned int length)
 {
   if (strcmp(topic, topTempIn) == 0)
   {
@@ -250,6 +260,7 @@ void callback(char *topic, byte *payload, unsigned int length)
     tempOut = atof((char *)payload);
   }
 
+  // sets brightness of the screen, will be overwritten almost immediately by the sensor values
   if (strcmp(topic, topBright) == 0)
   {
     payload[length] = '\0';
@@ -257,7 +268,8 @@ void callback(char *topic, byte *payload, unsigned int length)
     int i = atoi(cstring);
     display.setBrightness(i);
   }
-
+  
+  // sets minimal brightness of the screen (used if sensor says zero light)
   if (strcmp(topic, topMinimalBright) == 0)
   {
     payload[length] = '\0';
@@ -265,6 +277,20 @@ void callback(char *topic, byte *payload, unsigned int length)
     minimalBright = atoi(cstring);
   }
 
+  // enable/disable light sensor and brightness information on the screen
+  if (strcmp(topic, topLightMeterDeb) == 0)
+  {
+    payload[length] = '\0';
+    char *cstring = (char *)payload;
+    if (strcmp(cstring, "1") == 0)
+    {
+      lightMeterDebug = true;
+    } else {
+      lightMeterDebug = false;
+    }
+  }
+
+  // flag for cooling indicator
   if (strcmp(topic, topCool) == 0)
   {
     payload[length] = '\0';
@@ -279,6 +305,7 @@ void callback(char *topic, byte *payload, unsigned int length)
     }
   }
 
+  // flag for heating indicator
   if (strcmp(topic, topHeat) == 0)
   {
     payload[length] = '\0';
@@ -313,6 +340,7 @@ void startMqtt()
       mqttClient.subscribe(topCool);
       mqttClient.subscribe(topBright);
       mqttClient.subscribe(topMinimalBright);
+      mqttClient.subscribe(topLightMeterDeb);
       logT("MQTT subscribed");
     }
     else
@@ -343,10 +371,10 @@ void setup()
   display.begin(16);
   display_update_enable(true);
   mqttClient.setServer(mqtt_server, mqtt_port);
-  mqttClient.setCallback(callback);
+  mqttClient.setCallback(mqttMessageReceived);
   startWifi();
   xHeliOSSetup();
-  configTime(MY_TZ, time_server);
+  taskTimeSync(1);
 
   Wire.begin(1, 3); //SDA(tx), SCL(rx)
   BH1750Check = lightMeter.begin(RESOLUTION_AUTO_HIGH, true);
@@ -381,9 +409,8 @@ void setup()
   // four hours for the timesync
   id = xTaskAdd("TASKTIMESYNC", &taskTimeSync);
   xTaskWait(id);
-  unsigned long i;
-  i = 4 * 60 * 60 * 1000 * 1000;
-  xTaskSetTimer(id, i);
+  time_t fourHours = 60 * 60 * 1000 * 1000;
+  xTaskSetTimer(id, fourHours);
 }
 
 uint8_t icon_index = 0;
